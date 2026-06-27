@@ -9,6 +9,10 @@ description = "Agentic system for selecting and orchestrating symbolic solvers."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "clingo>=5",
+    "mcp>=1",
+    "minizinc>=0.9",
+    "pyswip>=0.3",
     "pydantic>=2",
     "torch>=2",
     "transformers>=4",
@@ -21,6 +25,7 @@ dev = [
 
 [project.scripts]
 agentic-solver = "agentic_solver.main:main"
+agentic-solver-mcp = "agentic_solver.mcp_server.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
