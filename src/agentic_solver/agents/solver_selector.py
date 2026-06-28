@@ -6,6 +6,7 @@ This module only classifies a problem.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -64,8 +65,19 @@ def select_solver_from_file(
     # Step 1: load and validate the user-provided problem payload.
     problem_input = _read_problem_input(path)
 
+    return select_solver(problem_input.problem, model_id=model_id, generator=generator)
+
+
+def select_solver(
+    problem: str,
+    *,
+    model_id: str = DEFAULT_MODEL_ID,
+    generator: GenerateText | None = None,
+) -> dict[str, Any]:
+    """Select the most suitable symbolic solver for a problem statement."""
+
     # Step 2: create the model instruction that asks for classification only.
-    prompt = build_solver_selection_prompt(problem_input.problem)
+    prompt = build_solver_selection_prompt(problem)
 
     # Step 3: use an injected generator for tests or build the real local LLM
     # generator lazily so importing this module never loads the model.
@@ -136,6 +148,7 @@ def _read_problem_input(path: str | Path) -> ProblemInput:
         raise ValueError("Problem file must contain only a non-empty 'problem' string.") from exc
 
 
+@lru_cache(maxsize=2)
 def _build_transformers_generator(model_id: str) -> GenerateText:
     """Create a local Hugging Face Transformers text generator for the model."""
 

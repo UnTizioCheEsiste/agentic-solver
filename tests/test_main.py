@@ -3,30 +3,57 @@ import json
 from agentic_solver import main as pipeline_main
 
 
-def test_run_pipeline_delegates_to_solver_selector_and_logs(monkeypatch, tmp_path) -> None:
-    expected = {
+def test_run_pipeline_connects_selector_to_model_builder_and_logs(monkeypatch, tmp_path) -> None:
+    solver_selection = {
         "solver": "minizinc",
         "problem_type": "constraint_satisfaction",
         "confidence": 0.95,
         "reason": "Assignment problem with finite-domain constraints.",
     }
+    model_build = {
+        "solver": "minizinc",
+        "items": [{"index": 1, "content": "solve satisfy;"}],
+        "model": "solve satisfy;",
+        "validation": {"valid": True, "status": "valid", "message": "valid"},
+        "solve": {"status": "sat", "solution": "ok", "message": "SATISFIED"},
+        "tool_calls": 4,
+        "repair_attempts": 1,
+        "output_contract": "Raw output is the answer.",
+        "answer_artifact": {
+            "problem": "test",
+            "solver": "minizinc",
+            "model": "solve satisfy;",
+            "solver_status": "sat",
+            "raw_solution": "ok",
+            "solver_message": "SATISFIED",
+            "output_contract": "Raw output is the answer.",
+        },
+    }
 
-    def fake_select_solver_from_file(problem_file, *, model_id):
-        assert problem_file == "problems/example.json"
+    def fake_select_solver(problem, *, model_id, generator):
+        assert "Given a graph" in problem
         assert model_id == "test-model"
-        return expected
+        assert generator is None
+        return solver_selection
 
-    monkeypatch.setattr(
-        pipeline_main,
-        "select_solver_from_file",
-        fake_select_solver_from_file,
-    )
+    def fake_build_solver_model(problem, solver, *, model_id, generator):
+        assert "Given a graph" in problem
+        assert solver == "minizinc"
+        assert model_id == "test-model"
+        assert generator is None
+        return model_build
+
+    monkeypatch.setattr(pipeline_main, "select_solver", fake_select_solver)
+    monkeypatch.setattr(pipeline_main, "build_solver_model", fake_build_solver_model)
 
     assert pipeline_main.run_pipeline(
         "problems/example.json",
         model_id="test-model",
         log_file=tmp_path / "executions.jsonl",
-    ) == expected
+    ) == {
+        "solver_selection": solver_selection,
+        "model_build": model_build,
+    }
 
     log_lines = (tmp_path / "executions.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(log_lines) == 1
@@ -34,10 +61,10 @@ def test_run_pipeline_delegates_to_solver_selector_and_logs(monkeypatch, tmp_pat
     assert log_record["problem_id"] == "example"
     assert log_record["model_name"] == "test-model"
     assert log_record["selected_solver"] == "minizinc"
-    assert log_record["tool_calls"] == 0
-    assert log_record["repair_attempts"] == 0
-    assert log_record["model_valid"] is None
-    assert log_record["solver_status"] == "model_valid"
+    assert log_record["tool_calls"] == 4
+    assert log_record["repair_attempts"] == 1
+    assert log_record["model_valid"] is True
+    assert log_record["solver_status"] == "solved"
     assert log_record["solution_correct"] is None
     assert log_record["execution_time_seconds"] >= 0
     assert log_record["input_tokens"] is None
@@ -46,10 +73,8 @@ def test_run_pipeline_delegates_to_solver_selector_and_logs(monkeypatch, tmp_pat
 
 def test_main_prints_pipeline_result(monkeypatch, capsys) -> None:
     expected = {
-        "solver": "asp",
-        "problem_type": "declarative_planning",
-        "confidence": 0.8,
-        "reason": "Rules and admissible sets.",
+        "solver_selection": {"solver": "asp"},
+        "model_build": {"solve": {"status": "sat"}},
     }
 
     monkeypatch.setattr(

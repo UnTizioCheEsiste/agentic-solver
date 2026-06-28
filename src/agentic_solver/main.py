@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any, Sequence
 
-from agentic_solver.agents import select_solver_from_file
+from agentic_solver.agents import build_solver_model, select_solver
+from agentic_solver.agents.solver_selector import (
+    GenerateText,
+    _build_transformers_generator,
+    _read_problem_input,
+)
 from agentic_solver.config import DEFAULT_EXECUTION_LOG, DEFAULT_MODEL_ID
 from agentic_solver.execution_logs import (
     ExecutionLog,
@@ -22,23 +28,55 @@ def run_pipeline(
     *,
     model_id: str = DEFAULT_MODEL_ID,
     log_file: str | Path | None = DEFAULT_EXECUTION_LOG,
+    solver_selector_generator: GenerateText | None = None,
+    model_builder_generator: GenerateText | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline for a problem file."""
 
-    # For now, the complete pipeline is the solver selector. The return value is
-    # the strict JSON-compatible solver-selection payload.
-
     started_at = time.perf_counter()
     selected_solver: str | None = None
+    tool_calls = 0
+    repair_attempts = 0
+    model_valid: bool | None = None
     solver_status = "not_started"
 
     try:
-        result = select_solver_from_file(problem_file, model_id=model_id)
-        selected_solver = result["solver"]
-        solver_status = "model_valid"
-        return result
+        _log_progress(f"reading problem file: {problem_file}")
+        problem_input = _read_problem_input(problem_file)
+        shared_generator = None
+        if solver_selector_generator is None and model_builder_generator is None:
+            _log_progress(f"loading shared model: {model_id}")
+            shared_generator = _build_transformers_generator(model_id)
+
+        _log_progress("selecting solver")
+        solver_selection = select_solver(
+            problem_input.problem,
+            model_id=model_id,
+            generator=solver_selector_generator or shared_generator,
+        )
+        selected_solver = solver_selection["solver"]
+        _log_progress(f"selected solver: {selected_solver}")
+        _log_progress("building solver model")
+        model_build = build_solver_model(
+            problem_input.problem,
+            selected_solver,
+            model_id=model_id,
+            generator=model_builder_generator or shared_generator,
+        )
+        _log_progress("solver model completed")
+        tool_calls = model_build["tool_calls"]
+        repair_attempts = model_build["repair_attempts"]
+        model_valid = bool(model_build["validation"]["valid"])
+        solver_status = _pipeline_solver_status(model_build)
+        return {
+            "solver_selection": solver_selection,
+            "model_build": model_build,
+        }
     except Exception:
-        solver_status = "selection_failed"
+        if selected_solver is None:
+            solver_status = "selection_failed"
+        else:
+            solver_status = "solver_error"
         raise
     finally:
         if log_file is not None:
@@ -47,9 +85,9 @@ def run_pipeline(
                     problem_id=problem_id_from_path(problem_file),
                     model_name=model_id,
                     selected_solver=selected_solver,
-                    tool_calls=0,
-                    repair_attempts=0,
-                    model_valid=None,
+                    tool_calls=tool_calls,
+                    repair_attempts=repair_attempts,
+                    model_valid=model_valid,
                     solver_status=solver_status,
                     solution_correct=None,
                     execution_time_seconds=time.perf_counter() - started_at,
@@ -86,6 +124,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = run_pipeline(args.problem_file, model_id=args.model_id, log_file=log_file)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
+
+
+def _pipeline_solver_status(model_build: dict[str, Any]) -> str:
+    validation = model_build.get("validation")
+    if validation is not None and not validation["valid"]:
+        return "model_validation_failed"
+
+    solve = model_build.get("solve")
+    if solve is None:
+        return "solver_error"
+
+    status = solve["status"]
+    if status == "sat":
+        return "solved"
+    if status in {"unsat", "unknown"}:
+        return status
+    return "solver_error"
+
+
+def _log_progress(message: str) -> None:
+    print(f"[agentic-solver] {message}", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
