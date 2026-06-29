@@ -45,8 +45,7 @@ def run_pipeline(
         problem_input = _read_problem_input(problem_file)
         shared_generator = None
         if solver_selector_generator is None and model_builder_generator is None:
-            _log_progress(f"loading shared model: {model_id}")
-            shared_generator = _build_transformers_generator(model_id)
+            shared_generator = _lazy_shared_generator(model_id)
 
         _log_progress("selecting solver")
         solver_selection = select_solver(
@@ -145,6 +144,19 @@ def _pipeline_solver_status(model_build: dict[str, Any]) -> str:
 
 def _log_progress(message: str) -> None:
     print(f"[agentic-solver] {message}", file=sys.stderr, flush=True)
+
+
+def _lazy_shared_generator(model_id: str) -> GenerateText:
+    generator: GenerateText | None = None
+
+    def generate(prompt: str) -> str:
+        nonlocal generator
+        if generator is None:
+            _log_progress(f"loading shared model: {model_id}")
+            generator = _build_transformers_generator(model_id)
+        return generator(prompt)
+
+    return generate
 
 
 if __name__ == "__main__":

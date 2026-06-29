@@ -73,6 +73,7 @@ def select_solver(
     *,
     model_id: str = DEFAULT_MODEL_ID,
     generator: GenerateText | None = None,
+    max_repair_attempts: int = 2,
 ) -> dict[str, Any]:
     """Select the most suitable symbolic solver for a problem statement."""
 
@@ -81,10 +82,25 @@ def select_solver(
 
     # Step 3: use an injected generator for tests or build the real local LLM
     # generator lazily so importing this module never loads the model.
-    raw_output = (generator or _build_transformers_generator(model_id))(prompt)
+    text_generator = generator or _build_transformers_generator(model_id)
 
     # Step 4: enforce the strict output schema before returning data to callers.
-    return parse_solver_selection(raw_output).model_dump()
+    raw_output = text_generator(prompt)
+    for _attempt in range(max_repair_attempts + 1):
+        try:
+            return parse_solver_selection(raw_output).model_dump()
+        except ValueError as exc:
+            if _attempt >= max_repair_attempts:
+                raise
+            raw_output = text_generator(
+                build_solver_selection_repair_prompt(
+                    problem=problem,
+                    invalid_output=raw_output,
+                    error=str(exc),
+                )
+            )
+
+    raise ValueError("Model output does not match SolverSelection schema.")
 
 
 def build_solver_selection_prompt(problem: str) -> str:
@@ -94,16 +110,44 @@ def build_solver_selection_prompt(problem: str) -> str:
         "You are an agent that selects the most suitable symbolic solver for "
         "a problem, without solving it and without generating code.\n\n"
         "Choose exactly one solver from: asp, prolog, minizinc.\n\n"
+        "You must always choose one of these three solvers. Never answer with "
+        "none, unknown, no_solver, or any solver outside the allowed list.\n\n"
         "Guidelines:\n"
         "- minizinc: combinatorial problems, optimization, finite-domain "
-        "constraints, scheduling, assignment, constraint satisfaction.\n"
+        "constraints, scheduling, assignment, constraint satisfaction, and "
+        "numeric word problems that are naturally modeled as constraints over "
+        "unknown finite-domain variables.\n"
         "- asp: planning, declarative logic, rules, logical constraints, stable "
         "models, search for admissible sets.\n"
         "- prolog: logical inference, queries, relations, symbolic deduction, "
-        "knowledge bases.\n\n"
+        "knowledge bases, deterministic arithmetic word problems, totals, rates, "
+        "unit conversions, and relation queries that can be answered by a direct "
+        "solve(Result) predicate.\n\n"
         "Respond only with valid JSON, without Markdown and without extra text. "
         "The JSON must contain exactly these fields: solver, problem_type, "
         "confidence, reason. The solver field must be lowercase.\n\n"
+        f"Problem:\n{problem}"
+    )
+
+
+def build_solver_selection_repair_prompt(
+    *,
+    problem: str,
+    invalid_output: str,
+    error: str,
+) -> str:
+    """Build a retry prompt when solver selection violates the output schema."""
+
+    return (
+        "Your previous solver-selection response violated the required schema.\n\n"
+        "You must return only valid JSON with exactly these fields: solver, "
+        "problem_type, confidence, reason.\n\n"
+        "The solver field must be exactly one of: asp, prolog, minizinc. "
+        "There is no 'none' option. If the problem is deterministic arithmetic, "
+        "rates, totals, or unit conversion, prefer prolog. If it is a finite-domain "
+        "constraint or optimization model, prefer minizinc.\n\n"
+        f"Schema error:\n{error}\n\n"
+        f"Invalid previous output:\n{invalid_output}\n\n"
         f"Problem:\n{problem}"
     )
 

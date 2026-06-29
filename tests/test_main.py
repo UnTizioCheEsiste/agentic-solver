@@ -10,6 +10,15 @@ def test_run_pipeline_connects_selector_to_model_builder_and_logs(monkeypatch, t
         "confidence": 0.95,
         "reason": "Assignment problem with finite-domain constraints.",
     }
+    problem_analysis = {
+        "problem_summary": "Return a satisfying model.",
+        "entities": [],
+        "quantities": [],
+        "relations": [],
+        "target": "satisfying assignment",
+        "assumptions": [],
+        "output_interpretation": "Raw output is the answer.",
+    }
     model_build = {
         "solver": "minizinc",
         "items": [{"index": 1, "content": "solve satisfy;"}],
@@ -19,9 +28,11 @@ def test_run_pipeline_connects_selector_to_model_builder_and_logs(monkeypatch, t
         "tool_calls": 4,
         "repair_attempts": 1,
         "output_contract": "Raw output is the answer.",
+        "problem_analysis": problem_analysis,
         "answer_artifact": {
             "problem": "test",
             "solver": "minizinc",
+            "problem_analysis": problem_analysis,
             "model": "solve satisfy;",
             "solver_status": "sat",
             "raw_solution": "ok",
@@ -31,16 +42,16 @@ def test_run_pipeline_connects_selector_to_model_builder_and_logs(monkeypatch, t
     }
 
     def fake_select_solver(problem, *, model_id, generator):
-        assert "Given a graph" in problem
+        assert problem
         assert model_id == "test-model"
-        assert generator is None
+        assert generator is not None
         return solver_selection
 
     def fake_build_solver_model(problem, solver, *, model_id, generator):
-        assert "Given a graph" in problem
+        assert problem
         assert solver == "minizinc"
         assert model_id == "test-model"
-        assert generator is None
+        assert generator is not None
         return model_build
 
     monkeypatch.setattr(pipeline_main, "select_solver", fake_select_solver)

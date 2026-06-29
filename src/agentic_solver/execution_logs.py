@@ -10,6 +10,15 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 
+# Pipeline-level solver status values:
+# - not_started: the pipeline has not reached solver selection/model execution.
+# - selection_failed: the first agent failed before selecting a solver.
+# - model_validation_failed: the second agent produced a model that did not validate.
+# - model_valid: a model validated successfully, but solving has not run or been logged yet.
+# - solver_error: the backend failed while solving or the pipeline failed after selection.
+# - unsat: the solver proved that the generated model has no solution.
+# - unknown: the solver could not determine satisfiability.
+# - solved: the solver found at least one satisfying solution.
 SolverStatus = Literal[
     "not_started",
     "selection_failed",

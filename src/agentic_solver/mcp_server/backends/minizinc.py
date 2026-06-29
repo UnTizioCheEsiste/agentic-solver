@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import re
 
 import minizinc
 
@@ -20,6 +21,14 @@ class MiniZincBackend:
 
     def validate(self, model: str) -> ValidationResult:
         """Validate MiniZinc syntax and instance analysis."""
+
+        prevalidation_error = _prevalidate_minizinc_model(model)
+        if prevalidation_error is not None:
+            return ValidationResult(
+                valid=False,
+                status="invalid",
+                message=prevalidation_error,
+            )
 
         try:
             instance = self._build_instance(model)
@@ -55,3 +64,29 @@ class MiniZincBackend:
         model.add_string(model_text)
         return minizinc.Instance(solver, model)
 
+
+def _prevalidate_minizinc_model(model: str) -> str | None:
+    if re.search(r"\bsolve\s+satisfy\s*:", model):
+        return "MiniZinc solve statements must use `solve satisfy;`, not `solve satisfy:`."
+
+    output_match = re.search(r"(?ms)\boutput\s*\[(.*?)\]\s*;", model)
+    if output_match is not None:
+        output_body = output_match.group(1)
+        if '"' not in output_body and "show(" not in output_body:
+            return (
+                "MiniZinc output must be an array of strings. Use string literals "
+                "and show(...) for numeric values."
+            )
+
+    for raw_line in model.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("%"):
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*=", line):
+            return (
+                "MiniZinc does not allow bare assignment statements after "
+                "declarations. Use `constraint ...;` or initialize a parameter "
+                "in its declaration."
+            )
+
+    return None

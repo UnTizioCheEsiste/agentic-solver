@@ -4,6 +4,7 @@ import pytest
 
 from agentic_solver.agents.model_builder import (
     build_solver_model,
+    parse_problem_analysis,
     parse_model_build_plan,
     parse_model_repair_plan,
 )
@@ -27,6 +28,25 @@ class FakeBackend:
         return SolveResult(status="sat", solution="2", message="SATISFIED")
 
 
+def _analysis() -> dict:
+    return {
+        "problem_summary": "Find x.",
+        "entities": ["x"],
+        "quantities": [
+            {
+                "name": "x",
+                "value": None,
+                "unit": None,
+                "description": "Integer decision variable.",
+            }
+        ],
+        "relations": ["x = 2"],
+        "target": "x",
+        "assumptions": [],
+        "output_interpretation": "The raw solution is the value assigned to x.",
+    }
+
+
 def test_build_solver_model_returns_structured_answer_artifact() -> None:
     backend = FakeBackend()
     session = ModelSession(backends={"minizinc": backend})
@@ -39,11 +59,12 @@ def test_build_solver_model_returns_structured_answer_artifact() -> None:
         ],
         "output_contract": "The raw solution is the value assigned to x.",
     }
+    responses = iter([json.dumps(_analysis()), json.dumps(plan)])
 
     result = build_solver_model(
         "Find x.",
         "minizinc",
-        generator=lambda _prompt: json.dumps(plan),
+        generator=lambda _prompt: next(responses),
         session=session,
     )
 
@@ -53,6 +74,7 @@ def test_build_solver_model_returns_structured_answer_artifact() -> None:
     assert result["answer_artifact"] == {
         "problem": "Find x.",
         "solver": "minizinc",
+        "problem_analysis": _analysis(),
         "model": "var 1..3: x;\nconstraint x = 2;\nsolve satisfy;\noutput [show(x)];",
         "solver_status": "sat",
         "raw_solution": "2",
@@ -66,6 +88,7 @@ def test_build_solver_model_repairs_after_validation_failure() -> None:
     session = ModelSession(backends={"minizinc": backend})
     responses = iter(
         [
+            json.dumps(_analysis()),
             json.dumps(
                 {
                     "items": ["broken"],
@@ -114,6 +137,11 @@ def test_parse_model_build_plan_rejects_extra_fields() -> None:
                 }
             )
         )
+
+
+def test_parse_problem_analysis_rejects_extra_fields() -> None:
+    with pytest.raises(ValueError, match="ProblemAnalysis schema"):
+        parse_problem_analysis(json.dumps({**_analysis(), "debug": "not allowed"}))
 
 
 def test_parse_model_repair_plan_rejects_unknown_tool() -> None:
